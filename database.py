@@ -1,4 +1,4 @@
-ç"""
+"""
 Database Module for API
 Supports both SQLite (local) and PostgreSQL (production).
 Set DATABASE_URL environment variable for PostgreSQL.
