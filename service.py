@@ -1679,379 +1679,34 @@ def make_proxy_url(raw_url):
 from bs4 import BeautifulSoup
 
 # ==============================================================================
-# MYEDIT ONLINE ALTYAPI VE KRIPTOGRAFİK YARDIMCILAR (Poofy Email)
+# GEÇİCİ E-POSTA (TEMP MAIL) MODÜLÜ ENTEGRASYONU (temp.py)
 # ==============================================================================
-
-# İSTEDİĞİN DOMAİNLERİ BURAYA GİREBİLİRSİN
-# CyberLink ile stabil çalıştığı test edilen domainler listenin başındadır.
-WHITELIST_DOMAINS = [
-    "fansubupdate.com",
-]
-
-POLL_COMPONENTS = [
-    "frontend.components.action",
-    "frontend.components.token-login",
-    "frontend.components.check-mail",
-    "frontend.components.inbox-message",
-]
-
-
-def generate_random_name(length: int = 10) -> str:
-    """Rastgele kullanıcı adı üretir (örn: u_7a8b9c)."""
-    chars = string.ascii_lowercase + string.digits
-    rand_suffix = "".join(random.choices(chars, k=length))
-    return f"u_{rand_suffix}"
-
-generate_random_username = generate_random_name
-
-
-# ==============================================================================
-# TEMP MAIL PROXY AYARLARI (Render.com Temp Mail Proxy Ayari İcin)
-# ==============================================================================
-# Render.com sunucularında temp mail IP rate limit veya engeline karşı
-# için sadece temp mail isteklerine özel bu proxy alanı tanımlanmıştır.
-# Temp mail dışındaki CyberLink, resim, video vb. hiçbir istek bu proxy'yi KULLANMAZ.
-#
-# TEMP_MAIL_PROXY_MODE (Proxy Durumu):
-#   1 -> Temp mail istekleri Webshare proxy üzerinden geçer (Render.com için 1 yapın).
-#   0 -> Proxy devre dışı kalır, doğrudan sunucu IP'si üzerinden bağlanır.
-TEMP_MAIL_PROXY_MODE = 1
-
-TEMP_MAIL_PROXY_CONFIG = {
-    "http": "http://nrrbciri-rotate:5cauzsujeluf@p.webshare.io:80",
-    "https": "http://nrrbciri-rotate:5cauzsujeluf@p.webshare.io:80",
-}
-
-
-def apply_temp_mail_proxy(session: requests.Session):
-    """Sadece TempMailClient oturumuna proxy uygular.
-    
-    İleride proxy'yi tamamen kaldırmak isterseniz bu bloğu ve TempMailClient
-    içindeki apply_temp_mail_proxy(self.session) satırını silmeniz yeterlidir.
-    """
-    if TEMP_MAIL_PROXY_MODE == 1 and TEMP_MAIL_PROXY_CONFIG:
-        session.proxies.update(TEMP_MAIL_PROXY_CONFIG)
-# ==============================================================================
-
-
-PROXY_MODE = TEMP_MAIL_PROXY_MODE
-PROXY_CONFIG = TEMP_MAIL_PROXY_CONFIG
-
-class TempMailClient:
-    """Poofy Email (poofy.email) API İstemcisi"""
-
-    BASE_URL = "https://poofy.email"
-
-    def __init__(
-        self,
-        domain: Optional[str] = None,
-        api_key: Optional[str] = None,
-        proxy_mode: int = PROXY_MODE,
-        proxy_config: Optional[dict] = None,
-    ):
-        self.domain = domain
-        self.api_key = api_key or os.environ.get("POOFY_API_KEY")
-        self.inbox_id = None
-        self.address = None
-        self.email = None
-        self.box = None
-        self.password = None
-        self._seen_ids = set()
-
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip, deflate",
-            "Origin": self.BASE_URL,
-            "Referer": f"{self.BASE_URL}/",
-        })
-
-        if self.api_key:
-            self.session.headers["Authorization"] = f"Bearer {self.api_key}"
-
-        # Proxy Yapılandırması (Dosyadaki mevcut proxy ayarlarıyla tam uyumlu)
-        if proxy_config is not None:
-            if proxy_mode == 1 and proxy_config:
-                self.session.proxies.update(proxy_config)
-        else:
-            apply_temp_mail_proxy(self.session)
-
-    def get_available_domains(self) -> List[str]:
-        """Serviste o an aktif olan domain listesini çeker."""
-        try:
-            endpoint = f"{self.BASE_URL}/api/v1/domains" if self.api_key else f"{self.BASE_URL}/api/domains"
-            resp = self.session.get(endpoint, timeout=10)
-            if resp.ok:
-                data = resp.json()
-                domains = data.get("domains", [])
-                if isinstance(domains, list) and domains:
-                    return domains
-        except Exception as e:
-            print(f"[Poofy] Domain sorgu uyarısı: {e}")
-
-        return WHITELIST_DOMAINS
-
-    def get_email(self, local_part: Optional[Union[str, int]] = None, domain: Optional[str] = None, length: Optional[int] = None) -> str:
-        """Yeni bir geçici e-posta kutusu oluşturur ve adresini döner.
-        
-        Args:
-            local_part: İsteğe bağlı e-posta ön eki veya uzunluk (int girilirse).
-            domain: İsteğe bağlı domain.
-            length: Rastgele isim uzunluğu.
-            
-        Returns:
-            Oluşturulan e-posta adresi (örnek: u_k9d2f4a1@fansubupdate.com)
-        """
-        if isinstance(local_part, int):
-            length = local_part
-            local_part = None
-
-        active_domains = self.get_available_domains()
-        
-        # Domain seçimi: Verilen -> Whitelist ile eşleşen ilk aktif -> Aktiflerin ilki
-        selected_domain = domain or self.domain
-        if not selected_domain:
-            for d in WHITELIST_DOMAINS:
-                if d in active_domains:
-                    selected_domain = d
-                    break
-        if not selected_domain:
-            selected_domain = active_domains[0] if active_domains else "fansubupdate.com"
-
-        name = local_part or generate_random_name(length or 8)
-
-        # 1. API Key varsa v1 endpoint'i kullan
-        if self.api_key:
-            payload = {
-                "name": name,
-                "domain": selected_domain,
-                "ttl_minutes": 60,
-            }
-            resp = self.session.post(f"{self.BASE_URL}/api/v1/inboxes", json=payload, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            self.inbox_id = data.get("id")
-            self.address = data.get("address")
-            self.password = data.get("password")
-        else:
-            # 2. Public Web API endpoint'i
-            payload = {
-                "localPart": name,
-                "domain": selected_domain,
-                "style": "name",
-            }
-            resp = self.session.post(f"{self.BASE_URL}/api/inboxes", json=payload, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            mailbox = data.get("mailbox", {})
-            self.inbox_id = mailbox.get("id")
-            self.address = mailbox.get("address")
-            self.password = data.get("password")
-
-        self.domain = selected_domain
-        self.email = self.address
-        self.box = name
-        self._seen_ids.clear()
-        print(f"[Poofy] E-posta oluşturuldu: {self.address} (ID: {self.inbox_id})")
-        return self.address
-
-    def get_messages(self) -> List[Dict[str, Any]]:
-        """Gelen kutusundaki e-posta listesini çeker."""
-        if not self.inbox_id:
-            raise ValueError("[Poofy] Önce get_email() çağrılarak bir posta kutusu oluşturulmalıdır!")
-
-        if self.api_key:
-            resp = self.session.get(f"{self.BASE_URL}/api/v1/inboxes/{self.inbox_id}/messages", timeout=15)
-            resp.raise_for_status()
-            return resp.json().get("messages", [])
-        else:
-            resp = self.session.get(f"{self.BASE_URL}/api/messages?mailbox={self.inbox_id}", timeout=15)
-            resp.raise_for_status()
-            return resp.json().get("messages", [])
-
-    def get_message_detail(self, message_id: str) -> Dict[str, Any]:
-        """Belirtilen mesajın detaylarını (özne, link, text, html vb.) çeker."""
-        try:
-            endpoint = f"{self.BASE_URL}/api/v1/messages/{message_id}" if self.api_key else f"{self.BASE_URL}/api/messages/{message_id}"
-            resp = self.session.get(endpoint, timeout=15)
-            if resp.ok:
-                data = resp.json()
-                return data.get("message", data)
-        except Exception:
-            pass
-
-        # Detay endpoint'i yoksa mesaj listesinden ilgili mesajı bul
-        for msg in self.get_messages():
-            if str(msg.get("id")) == str(message_id):
-                return msg
-
-        return {}
-
-    def _extract_activation_link(self, text: str) -> Optional[str]:
-        """E-posta içeriğinden aktivasyon / doğrulama linkini ayıklar."""
-        if not text:
-            return None
-
-        # 1. CyberLink özel trace linki (en yüksek öncelik)
-        trace_links = re.findall(
-            r'https?://membership\.cyberlink\.com/prog/event/autoedm/trace_mem\.jsp\?[^\s"\'<>]+',
-            text,
-        )
-        for link in trace_links:
-            clean = link.replace("&amp;", "&").rstrip("\"'.,")
-            if any(k in clean for k in ["account-activate", "Activate", "active-member"]):
-                return clean
-
-        # 2. Genel activate / verify / confirm / token / signup linkleri
-        general_links = re.findall(
-            r'https?://[^\s"\'<>]+(?:activate|confirm|verify|token|signup)[^\s"\'<>]*',
-            text,
-            re.IGNORECASE,
-        )
-        for link in general_links:
-            clean = link.replace("&amp;", "&").rstrip("\"'.,")
-            if not any(ign in clean for ign in ["poofy.email", "w3.org", "schema.org"]):
-                return clean
-
-        if trace_links:
-            return trace_links[0].replace("&amp;", "&").rstrip("\"'.,")
-
-        # 3. Genel bağlantı (poofy harici)
-        links = re.findall(r'https?://[^\s"\'<>]+', text)
-        for link in links:
-            cleaned = link.replace("&amp;", "&").rstrip("\"'.,")
-            if not any(ign in cleaned for ign in ["poofy.email", "w3.org", "schema.org"]):
-                return cleaned
-
-        return None
-
-    def _extract_code(self, text: str, detail_code: Optional[str] = None) -> Optional[str]:
-        """E-posta detayından veya metninden OTP/onay kodunu ayıklar."""
-        if detail_code:
-            return str(detail_code).strip()
-
-        if not text:
-            return None
-
-        codes = re.findall(r"\b\d{4,8}\b", text)
-        return codes[0] if codes else None
-
-    def wait_for_message(self, timeout: int = 60, interval: int = 3) -> Dict[str, Any]:
-        """Gelen kutusuna yeni bir e-posta düşene kadar bekler."""
-        print(f"[Poofy] Gelen kutusu bekleniyor ({self.address})...")
-        deadline = time.time() + timeout
-
-        while time.time() < deadline:
-            try:
-                messages = self.get_messages()
-                for msg in messages:
-                    msg_id = str(msg.get("id"))
-                    if msg_id not in self._seen_ids:
-                        self._seen_ids.add(msg_id)
-                        print(f"[+] Yeni e-posta alındı! ID: {msg_id} - Konu: {msg.get('subject', 'Konusuz')}")
-                        detail = self.get_message_detail(msg_id) or msg
-                        return detail
-            except Exception as e:
-                print(f"[Poofy] Mesaj sorgu uyarısı: {e}")
-
-            time.sleep(interval)
-
-        raise TimeoutError(f"[Poofy] {timeout} saniye içinde yeni e-posta gelmedi!")
-
-    def wait_for_activation_link(self, timeout: int = 60, interval: int = 3) -> str:
-        """Gelen e-postadaki onay/aktivasyon linkini bekler ve döner."""
-        print(f"[Poofy] Aktivasyon linki bekleniyor ({self.address})...")
-        deadline = time.time() + timeout
-
-        while time.time() < deadline:
-            try:
-                messages = self.get_messages()
-                for msg in messages:
-                    msg_id = str(msg.get("id"))
-                    if msg_id not in self._seen_ids:
-                        self._seen_ids.add(msg_id)
-                        print(f"[+] Yeni e-posta geldi! ID: {msg_id}")
-                        detail = self.get_message_detail(msg_id) or msg
-
-                        # 1. API doğrudan link sağladı mı? (verify_link, link, verification_link)
-                        api_link = (
-                            detail.get("verify_link")
-                            or detail.get("link")
-                            or detail.get("verification_link")
-                            or msg.get("verify_link")
-                            or msg.get("link")
-                        )
-                        if api_link:
-                            print(f"[✓] Poofy API linki yakaladı: {api_link}")
-                            return api_link
-
-                        content = (
-                            (detail.get("html") or detail.get("html_body") or "")
-                            + "\n"
-                            + (detail.get("text") or detail.get("text_body") or "")
-                            + "\n"
-                            + (detail.get("snippet") or "")
-                        )
-                        link = self._extract_activation_link(content)
-                        if link:
-                            print(f"[✓] Aktivasyon linki bulundu: {link}")
-                            return link
-            except Exception as e:
-                print(f"[Poofy] Mesaj sorgu uyarısı: {e}")
-
-            time.sleep(interval)
-
-        raise TimeoutError(f"[Poofy] {timeout} saniye içinde aktivasyon linki gelmedi!")
-
-    def wait_for_code(self, timeout: int = 60, interval: int = 3) -> str:
-        """Gelen e-postadaki OTP / doğrulama kodunu bekler ve döner."""
-        print(f"[Poofy] Doğrulama kodu bekleniyor ({self.address})...")
-        deadline = time.time() + timeout
-
-        while time.time() < deadline:
-            try:
-                messages = self.get_messages()
-                for msg in messages:
-                    msg_id = str(msg.get("id"))
-                    if msg_id not in self._seen_ids:
-                        self._seen_ids.add(msg_id)
-                        print(f"[+] Yeni e-posta geldi! ID: {msg_id}")
-                        detail = self.get_message_detail(msg_id) or msg
-
-                        # 1. API doğrudan OTP/kod sağladı mı? (otp_code, code)
-                        code = (
-                            detail.get("otp_code")
-                            or detail.get("code")
-                            or msg.get("otp_code")
-                            or msg.get("code")
-                        )
-                        if code:
-                            print(f"[✓] Poofy API kodu yakaladı: {code}")
-                            return str(code)
-
-                        content = (
-                            (detail.get("html") or detail.get("html_body") or "")
-                            + "\n"
-                            + (detail.get("text") or detail.get("text_body") or "")
-                        )
-                        found_code = self._extract_code(content)
-                        if found_code:
-                            print(f"[✓] Doğrulama kodu bulundu: {found_code}")
-                            return found_code
-            except Exception as e:
-                print(f"[Poofy] Mesaj sorgu uyarısı: {e}")
-
-            time.sleep(interval)
-
-        raise TimeoutError(f"[Poofy] {timeout} saniye içinde doğrulama kodu gelmedi!")
-
-# Geriye dönük uyumluluk ve alternatif kullanım için alias:
-PoofyMailClient = TempMailClient
+# Temp mail mantığı, domain kuralları ve proxy ayarları 'temp.py' modülünden alınır.
+# Değişiklikler ve yeni sağlayıcı entegrasyonları için sadece 'temp.py' dosyasını düzenleyin.
+try:
+    from temp import (
+        WHITELIST_DOMAINS,
+        POLL_COMPONENTS,
+        generate_random_username,
+        generate_random_name,
+        TEMP_MAIL_PROXY_MODE,
+        TEMP_MAIL_PROXY_CONFIG,
+        apply_temp_mail_proxy,
+        TempMailClient,
+        PoofyMailClient,
+    )
+except ImportError:
+    from forCreativeLabs.temp import (
+        WHITELIST_DOMAINS,
+        POLL_COMPONENTS,
+        generate_random_username,
+        generate_random_name,
+        TEMP_MAIL_PROXY_MODE,
+        TEMP_MAIL_PROXY_CONFIG,
+        apply_temp_mail_proxy,
+        TempMailClient,
+        PoofyMailClient,
+    )
 
 
 # ================= MemberAuth Enkripsyon =================
@@ -2158,14 +1813,23 @@ def signup(email: str, password: str, lang: str = "enu", country: str = "US"):
         "nJoint": 62
     }
     payload, aes_key = create_member_auth_payload(user_data)
-    res = requests.post(SIGNUP_URL, json=payload, headers=MEMBER_HEADERS, timeout=30)
-    print(f"[DEBUG SIGNUP] HTTP {res.status_code} | Yanit: {repr(res.text[:500])}")
-    res.raise_for_status()
-    body = res.json()
-    if body.get("status") == "SUCCESS" and "info" in body:
-        decrypted = decrypt_member_auth_response(body["info"], aes_key)
-        return {"status": "SUCCESS", "info": decrypted}
-    return body
+    try:
+        res = requests.post(SIGNUP_URL, json=payload, headers=MEMBER_HEADERS, timeout=30)
+        if res.status_code == 202 or not res.text or not res.text.strip():
+            print(f"[DEBUG SIGNUP] HTTP {res.status_code} | Headers: {dict(res.headers)} | Yanit: '{res.text}'")
+            return {"status": "FAILED", "code": res.status_code, "error": f"Empty or non-JSON response (HTTP {res.status_code})"}
+        res.raise_for_status()
+        body = res.json()
+        if body.get("status") == "SUCCESS" and "info" in body:
+            decrypted = decrypt_member_auth_response(body["info"], aes_key)
+            return {"status": "SUCCESS", "info": decrypted}
+        return body
+    except Exception as e:
+        raw_text = getattr(res, 'text', '') if 'res' in locals() else ''
+        status = getattr(res, 'status_code', None) if 'res' in locals() else None
+        headers = dict(getattr(res, 'headers', {})) if 'res' in locals() else {}
+        print(f"[DEBUG SIGNUP] Exception: {e} | HTTP {status} | Headers: {headers} | Yanit: '{raw_text}'")
+        return {"status": "FAILED", "error": str(e)}
 
 def activate_account(activation_url: str):
     """Mail gelen aktivasyon linkini takip eder ve hesabi aktiflestirir."""
@@ -3623,7 +3287,9 @@ def get_or_create_active_account(api_key_id, task_id=None, force_new=False):
                     except Exception:
                         pass
                 return member_token, acc_data
-            time.sleep(2)
+            if attempt < 4:
+                print(f"[ACCOUNT] Registration attempt {attempt+1} failed. Waiting 10s before retry...")
+                time.sleep(10)
 
     return None, None
 
@@ -3723,6 +3389,32 @@ def deduct_api_key_quota(api_key_id, task_id=None, amount=1):
         print(f"[QUOTA] Error deducting quota: {e}")
         return None
 
+def refund_api_key_quota(api_key_id, consumed_emails, task_id=None):
+    """Refunds previously deducted accounts/quotas back to used = 0 upon task failure/error.
+    Ensures that if a task fails, quota is immediately restored.
+    """
+    if not consumed_emails:
+        return
+    try:
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        if db.DB_TYPE == 'postgresql':
+            cursor.execute(
+                'UPDATE accounts SET used = 0 WHERE api_key_id = %s AND email = ANY(%s)',
+                (api_key_id, consumed_emails)
+            )
+        else:
+            placeholders = ','.join(['?'] * len(consumed_emails))
+            cursor.execute(
+                f'UPDATE accounts SET used = 0 WHERE api_key_id = ? AND email IN ({placeholders})',
+                [api_key_id] + list(consumed_emails)
+            )
+        conn.commit()
+        conn.close()
+        print(f"[QUOTA] Successfully refunded {len(consumed_emails)} quota units for task {task_id}.")
+    except Exception as e:
+        print(f"[QUOTA] Error refunding quota for task {task_id}: {e}")
+
 def login_with_retry_and_link(api_key_id, task_id=None):
     """Compatibility wrapper for obtaining active account."""
     return get_or_create_active_account(api_key_id, task_id)
@@ -3740,6 +3432,7 @@ def save_b64_to_temp_file(b64_data, suffix=".jpg"):
 
 def process_image_task(task_id, params, api_key_id):
     temp_files = []
+    deducted_accounts = None
     try:
         db.update_task_status(task_id, 'running')
 
@@ -3758,6 +3451,9 @@ def process_image_task(task_id, params, api_key_id):
                 break
         total_quota_to_deduct = model_api_credit * batch_size
 
+        # Kota gorev basinda pesin dusulur
+        deducted_accounts = deduct_api_key_quota(api_key_id, task_id, amount=total_quota_to_deduct)
+
         # Handle reference images (Image-to-Image)
         reference_images = []
         images = params.get('reference_images', [])
@@ -3769,6 +3465,8 @@ def process_image_task(task_id, params, api_key_id):
 
         model_data = IMAGE_MODELS_CONFIG.get(model)
         if not model_data:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, "400")
             return
@@ -3785,6 +3483,8 @@ def process_image_task(task_id, params, api_key_id):
             force_new = (attempt > 0)
             member_token, account = get_or_create_active_account(api_key_id, task_id=task_id, force_new=force_new)
             if not member_token:
+                if deducted_accounts:
+                    refund_api_key_quota(api_key_id, deducted_accounts, task_id)
                 db.update_task_status(task_id, 'failed')
                 db.add_task_log(task_id, "503")
                 return
@@ -3854,6 +3554,8 @@ def process_image_task(task_id, params, api_key_id):
                 break
 
         if not result:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, format_error_code(last_error))
             return
@@ -3879,22 +3581,29 @@ def process_image_task(task_id, params, api_key_id):
 
             if completed_files:
                 db.update_task_status(task_id, 'completed', make_proxy_url(completed_files[0]))
-                deduct_api_key_quota(api_key_id, task_id, amount=total_quota_to_deduct)
                 post_credits_info = get_member_remaining_credits(current_token)
                 post_credits = post_credits_info.get("total_remain", "?") if post_credits_info else "?"
                 print(f"[RENDER LOG] [IMAGE TASK: {task_id}] [TAMAMLANDI] -> Hesap: {account['email']} | Kalan Kredi: {post_credits}\n")
             else:
+                if deducted_accounts:
+                    refund_api_key_quota(api_key_id, deducted_accounts, task_id)
                 db.update_task_status(task_id, 'failed')
                 db.add_task_log(task_id, "500")
         elif result.get("status") == "Timeout":
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'timeout')
             db.add_task_log(task_id, "504")
         else:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, format_error_code(result.get('error')))
 
     except Exception as e:
         print(f"[ERROR] Image task {task_id} error: {e}")
+        if deducted_accounts:
+            refund_api_key_quota(api_key_id, deducted_accounts, task_id)
         db.update_task_status(task_id, 'error')
         db.add_task_log(task_id, format_error_code(e))
     finally:
@@ -3907,6 +3616,7 @@ def process_image_task(task_id, params, api_key_id):
 
 def process_video_task(task_id, params, api_key_id):
     temp_files = []
+    deducted_accounts = None
     try:
         db.update_task_status(task_id, 'running')
 
@@ -3926,6 +3636,9 @@ def process_video_task(task_id, params, api_key_id):
             if m.get('id') == raw_model or m.get('id') == model:
                 model_api_credit = m.get('credit', 1)
                 break
+
+        # Kota gorev basinda pesin dusulur
+        deducted_accounts = deduct_api_key_quota(api_key_id, task_id, amount=model_api_credit)
 
         input_mode = "TextToVideo"
         source_image_path = None
@@ -3966,6 +3679,8 @@ def process_video_task(task_id, params, api_key_id):
 
         model_data = VIDEO_MODELS_CONFIG.get(model)
         if not model_data:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, "400")
             return
@@ -3979,6 +3694,8 @@ def process_video_task(task_id, params, api_key_id):
             force_new = (attempt > 0)
             member_token, account = get_or_create_active_account(api_key_id, task_id=task_id, force_new=force_new)
             if not member_token:
+                if deducted_accounts:
+                    refund_api_key_quota(api_key_id, deducted_accounts, task_id)
                 db.update_task_status(task_id, 'failed')
                 db.add_task_log(task_id, "503")
                 return
@@ -4082,6 +3799,8 @@ def process_video_task(task_id, params, api_key_id):
                 break
 
         if not result:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, format_error_code(last_error))
             return
@@ -4108,22 +3827,26 @@ def process_video_task(task_id, params, api_key_id):
 
             if video_file:
                 db.update_task_status(task_id, 'completed', make_proxy_url(video_file))
-                deduct_api_key_quota(api_key_id, task_id, amount=model_api_credit)
             else:
                 db.update_task_status(task_id, 'completed', make_proxy_url(completed_files[0]) if completed_files else "")
-                deduct_api_key_quota(api_key_id, task_id, amount=model_api_credit)
             post_credits_info = get_member_remaining_credits(current_token)
             post_credits = post_credits_info.get("total_remain", "?") if post_credits_info else "?"
             print(f"[RENDER LOG] [VIDEO TASK: {task_id}] [TAMAMLANDI] -> Hesap: {account['email']} | Kalan Kredi: {post_credits}\n")
         elif result.get("status") == "Timeout":
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'timeout')
             db.add_task_log(task_id, "504")
         else:
+            if deducted_accounts:
+                refund_api_key_quota(api_key_id, deducted_accounts, task_id)
             db.update_task_status(task_id, 'failed')
             db.add_task_log(task_id, format_error_code(result.get('error')))
 
     except Exception as e:
         print(f"[ERROR] Video task {task_id} error: {e}")
+        if deducted_accounts:
+            refund_api_key_quota(api_key_id, deducted_accounts, task_id)
         db.update_task_status(task_id, 'error')
         db.add_task_log(task_id, format_error_code(e))
     finally:
